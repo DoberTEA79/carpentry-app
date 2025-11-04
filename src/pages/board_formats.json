@@ -1,0 +1,42 @@
+[
+  {
+    "id": "OSB",
+    "active": true,
+    "name": "OSB",
+    "material": "OSB",
+    "thickness": 12,
+    "size": "2800х1280"
+  },
+  {
+    "id": "ДСП 15 — 2800×2070",
+    "name": "ДСП 15 — 2800×2070",
+    "material": "ДСП",
+    "thickness": 15,
+    "size": "2800×2070",
+    "active": true
+  },
+  {
+    "id": "BF-mhi3w95t-zmhm",
+    "name": "Фанера 12 — 1525×1525",
+    "material": "Фанера",
+    "thickness": 12,
+    "size": "1525×1525",
+    "active": true
+  },
+  {
+    "id": "BF-mhi3w95t-70m3",
+    "name": "Фанера 12 — 2800×1280",
+    "material": "Фанера",
+    "thickness": 12,
+    "size": "2800×1280",
+    "active": true
+  },
+  {
+    "id": "BF-mhi3w95t-d983",
+    "name": "Фанера 12 — 1525×1470",
+    "material": "Фанера",
+    "thickness": 12,
+    "size": "1525×1470",
+    "active": true
+  }
+]
