@@ -21,8 +21,8 @@ const router = createBrowserRouter([
       { path: 'operator', element: <Operator /> },
       { path: 'curator', element: <CuratorPage /> },
       { path: 'curator/formats', element: <CuratorBoardsPage /> },
-      { path: 'ax', element: <AXPage /> },
-      { path: 'masters', element: <MasterDashboardPage /> }
+      { path: 'store', element: <AXPage /> },
+      { path: 'master', element: <MasterDashboardPage /> }
     ]
   }
 ])
