@@ -1,6 +1,6 @@
 import React from "react";
 
-/* ========== довідники ========== */
+/* ===== довідник матеріалів ===== */
 const MATERIAL_FROM_INDEX: Record<string, string> = {
   "721C0004": "Skl4",
   "721C0006": "Skl6",
@@ -28,7 +28,7 @@ const LOCS = [
   { code: "ST", label: "Стандартна" },
 ];
 
-/* ========== типи, як в Оператора ========== */
+/* ===== типи як в Оператора ===== */
 type OrderItem = { index: string; qtyPerCard: number };
 export type OperatorOrder = {
   id: string;
@@ -44,9 +44,11 @@ export type OperatorOrder = {
   closedAt?: string;
 };
 
-/* ========== LS helpers ========== */
+/* ===== LS ===== */
 const LS_POOL = "orders_pool";
 const LS_AUTH = "carpentry_auth";
+const LS_DOZ_OP = "DOZ_operator"; // що пише Оператор при закритті
+const LS_DOZ_KIT = "DOZ_buffer";  // що пише комплектовка / комірник
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -72,42 +74,7 @@ function loadAuth() {
   }
 }
 
-/* 
-  Нормалізація доступів.
-  Бо в нас могло лежати "Конструктор", а ми перевіряємо "constructor".
-*/
-const PAGE_ALIASES: Record<string, string> = {
-  // українські назви → ключі
-  "Оператор": "operator",
-  "Комплектовка": "kitting",
-  "Майстер": "master",
-  "Конструктор": "constructor",
-  "Комірник": "store",
-  "Куратор / Адмін": "curator",
-  // на всяк випадок англійські — в самого себе
-  operator: "operator",
-  kitting: "kitting",
-  master: "master",
-  constructor: "constructor",
-  store: "store",
-  curator: "curator",
-};
-
-function normalizeAllowedPages(raw: any): string[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((x) => {
-      if (typeof x !== "string") return "";
-      // обрізаємо пробіли
-      const trimmed = x.trim();
-      // якщо є в словнику — вертаємо ключ
-      if (PAGE_ALIASES[trimmed]) return PAGE_ALIASES[trimmed];
-      return trimmed; // хай буде як є
-    })
-    .filter(Boolean);
-}
-
-/* ========== дрібні хелпери ========== */
+/* ===== дрібні ===== */
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
@@ -123,37 +90,24 @@ function isoWeekday(d: Date) {
   return n === 0 ? 7 : n;
 }
 
-/* ========== сам компонент ========== */
+/* ======================= */
 export default function Constructor() {
-  // 1) читаємо сесію
+  /* ---- доступ ---- */
   const auth = React.useMemo(() => loadAuth(), []);
-
-  // 2) нормалізуємо доступи
-  const normalizedPages = normalizeAllowedPages(auth?.allowedPages || []);
-
-  // 3) перевіряємо: або є "constructor", або роль адмінська
-  const isAdmin =
-    typeof auth?.role === "string" &&
-    ["admin", "адмін", "Адмін", "куратор", "Куратор / Адмін"].some((r) =>
-      auth.role.toLowerCase().includes(r.toLowerCase())
-    );
-
   const allowed =
-    isAdmin || normalizedPages.includes("constructor");
-
+    !!auth && Array.isArray(auth.allowedPages) && auth.allowedPages.includes("constructor");
   if (!allowed) {
-    return (
-      <div className="p-6 text-center text-red-600">
-        Немає доступу до «Конструктора».
-      </div>
-    );
+    return <div className="p-6 text-center text-red-600">Немає доступу до «Конструктора».</div>;
   }
 
-  /* ---- далі твій робочий код конструктора ---- */
+  /* ---- стани ---- */
   const [program, setProgram] = React.useState(1);
-  const [plates, setPlates] = React.useState(1); // може бути 0.5
+  const [plates, setPlates] = React.useState(1);
   const [loc, setLoc] = React.useState("W");
   const [raw, setRaw] = React.useState("");
+
+  // пріоритет: 1=по плану, 2=треба, 3=терміново
+  const [priority, setPriority] = React.useState<1 | 2 | 3>(1);
 
   // розібрані рядки
   type Row = { index: string; qty: number };
@@ -164,36 +118,68 @@ export default function Constructor() {
         .map((l) => l.trim())
         .filter(Boolean)
         .map((l) => {
-          const p = l.split(/\s+|\t|,|;|\|/).filter(Boolean);
-          const idx = p[0] || "";
-          const q = Number(p[1]);
+          const parts = l.split(/\s+|\t|,|;|\|/).filter(Boolean);
+          const idx = (parts[0] || "").trim();
+          const q = Number(parts[1]);
           return { index: idx, qty: Number.isFinite(q) ? q : 0 };
         }),
     [raw]
   );
 
-  // інфозона ДОЗ (фейкові дані)
-  type ReorderRow = { id: string; source: "operator" | "kitting"; index: string; qty: number };
-  const [reordersOperator] = React.useState<ReorderRow[]>([
-    { id: "RO-1", source: "operator", index: "711C0018-XYZ", qty: 3 },
-    { id: "RO-2", source: "operator", index: "721C0012-AAA", qty: 2 },
-  ]);
-  const [reordersKitting] = React.useState<ReorderRow[]>([
-    { id: "RK-1", source: "kitting", index: "716C0016-BBB", qty: 5 },
-    { id: "RK-2", source: "kitting", index: "715C0016-CCC", qty: 1 },
-  ]);
+  // ====== реальні ДОЗамовлення з localStorage ======
+  // обидві структури — це просто { "index": кількість }
+  const [dozOperator, setDozOperator] = React.useState<Record<string, number>>(() =>
+    load<Record<string, number>>(LS_DOZ_OP, {})
+  );
+  const [dozKitting, setDozKitting] = React.useState<Record<string, number>>(() =>
+    load<Record<string, number>>(LS_DOZ_KIT, {})
+  );
+
+  // слухаємо зміни з інших вкладок
+  React.useEffect(() => {
+    function onStorage(e: StorageEvent) {
+      if (e.key === LS_DOZ_OP) setDozOperator(load<Record<string, number>>(LS_DOZ_OP, {}));
+      if (e.key === LS_DOZ_KIT) setDozKitting(load<Record<string, number>>(LS_DOZ_KIT, {}));
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+function clearDoz() {
+    if (!confirm("Очистити всі ДОзамовлення?")) return;
+    save(LS_DOZ_OP, {});
+    save(LS_DOZ_KIT, {});
+    setDozOperator({});
+    setDozKitting({});
+  }
+
+  // готуємо список для таблиці
+  type ReorderView = { id: string; source: "operator" | "kitting"; index: string; qty: number };
   const [reorderTab, setReorderTab] = React.useState<"all" | "operator" | "kitting">("all");
   const reorderList = React.useMemo(() => {
-    const all = [...reordersOperator, ...reordersKitting];
-    if (reorderTab === "operator") return all.filter((r) => r.source === "operator");
-    if (reorderTab === "kitting") return all.filter((r) => r.source === "kitting");
+    const op: ReorderView[] = Object.entries(dozOperator).map(([idx, q]) => ({
+      id: `op-${idx}`,
+      source: "operator",
+      index: idx,
+      qty: q,
+    }));
+    const kit: ReorderView[] = Object.entries(dozKitting).map(([idx, q]) => ({
+      id: `kit-${idx}`,
+      source: "kitting",
+      index: idx,
+      qty: q,
+    }));
+    const all = [...op, ...kit];
+    if (reorderTab === "operator") return op;
+    if (reorderTab === "kitting") return kit;
     return all;
-  }, [reordersOperator, reordersKitting, reorderTab]);
+  }, [dozOperator, dozKitting, reorderTab]);
 
-  // матеріал з 1 індексу
+  // матеріал з першого індексу
   const material = React.useMemo(() => {
     if (!rows.length) return "";
-    const first = rows[0].index;
+    const first = (rows[0].index || "").trim();
+    if (!first) return "";
     const key = Object.keys(MATERIAL_FROM_INDEX).find((k) => first.startsWith(k));
     return key ? MATERIAL_FROM_INDEX[key] : "";
   }, [rows]);
@@ -205,10 +191,10 @@ export default function Constructor() {
   const hh = now.getHours();
   const mm = String(now.getMinutes()).padStart(2, "0");
 
-  // у назві карти показуємо те, що ввів конструктор (навіть 0.5)
+  // назва карти
   const cardName = `P${pad2(program)}_${material || "??"}_${plates}Pl_${loc}_${week}${day}_${hh}.${mm}`;
 
-  // в замовлення — не менше 1 плити
+  // мінімум 1 плита в замовленні
   const effPlates = plates >= 1 ? plates : 1;
 
   const totalPieces = React.useMemo(
@@ -217,7 +203,7 @@ export default function Constructor() {
   );
 
   const [isWorking, setIsWorking] = React.useState(false);
-  const [lastOrder, setLastOrder] = React.useState<any | null>(null);
+  const [lastOrder, setLastOrder] = React.useState<OperatorOrder | null>(null);
 
   function copyName() {
     if (navigator.clipboard) navigator.clipboard.writeText(cardName);
@@ -231,7 +217,7 @@ export default function Constructor() {
     if (isWorking) return;
     setIsWorking(true);
 
-    // агрегація індексів
+    // агрегація
     const agg: Record<string, number> = {};
     for (const r of rows) {
       if (!r.index) continue;
@@ -250,13 +236,14 @@ export default function Constructor() {
       items: cleanItems,
       status: "pool",
       createdAt: new Date().toISOString(),
+      priority,
     };
 
     const pool = load<OperatorOrder[]>(LS_POOL, []);
     pool.unshift(order);
     save(LS_POOL, pool);
 
-    setLastOrder({ ...order });
+    setLastOrder(order);
     setProgram((p) => (typeof p === "number" ? p + 1 : Number(p || 0) + 1));
     setRaw("");
     setIsWorking(false);
@@ -264,10 +251,10 @@ export default function Constructor() {
 
   return (
     <div className="grid grid-cols-12 gap-6">
-      {/* верхня панель створення карти */}
+      {/* ВЕРХНІЙ БЛОК */}
       <section className="col-span-12 bg-white rounded-2xl shadow ring-1 ring-black/5 p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-2 order-1 sm:order-none">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
             <button
               onClick={copyName}
               title="Копіювати назву"
@@ -288,7 +275,37 @@ export default function Constructor() {
               {isWorking ? "Відправляю…" : "В РОБОТУ"}
             </button>
           </div>
-          <h2 className="text-lg font-medium">Створення карти</h2>
+
+          {/* пріоритети */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-neutral-500">Пріоритет:</span>
+            <div className="bg-neutral-100 rounded-xl p-1 flex gap-1">
+              <button
+                onClick={() => setPriority(3)}
+                className={`px-3 py-1.5 rounded-lg text-sm ${
+                  priority === 3 ? "bg-red-500 text-white" : "bg-white"
+                }`}
+              >
+                Терміново
+              </button>
+              <button
+                onClick={() => setPriority(2)}
+                className={`px-3 py-1.5 rounded-lg text-sm ${
+                  priority === 2 ? "bg-amber-400 text-white" : "bg-white"
+                }`}
+              >
+                Треба зробити
+              </button>
+              <button
+                onClick={() => setPriority(1)}
+                className={`px-3 py-1.5 rounded-lg text-sm ${
+                  priority === 1 ? "bg-blue-500 text-white" : "bg-white"
+                }`}
+              >
+                По плану
+              </button>
+            </div>
+          </div>
         </div>
 
         {lastOrder && (
@@ -298,6 +315,7 @@ export default function Constructor() {
           </div>
         )}
 
+        {/* форма */}
         <div className="grid md:grid-cols-12 gap-3 mt-4">
           <div className="md:col-span-2">
             <label className="text-sm text-neutral-600">P (№ програми)</label>
@@ -322,7 +340,9 @@ export default function Constructor() {
               }}
               className="w-full rounded-xl border border-neutral-300 px-3 py-2"
             />
-            <p className="text-xs text-neutral-400 mt-1">&lt;1 плити → в замовлення піде 1 плита</p>
+            <p className="text-xs text-neutral-400 mt-1">
+              &lt;1 плити → в замовлення піде 1 плита
+            </p>
           </div>
           <div className="md:col-span-3">
             <label className="text-sm text-neutral-600">Локація</label>
@@ -365,13 +385,23 @@ export default function Constructor() {
         </div>
       </section>
 
-      {/* нижня частина — без змін */}
+      {/* НИЗ */}
+            {/* нижня частина — як у тебе */}
+            {/* нижня частина — як у тебе */}
       <section className="col-span-12 bg-white rounded-2xl shadow ring-1 ring-black/5 p-5">
         <div className="grid grid-cols-12 md:gap-6 gap-5">
           {/* ДОзамовлення (інфо) */}
           <div className="col-span-12 md:col-span-5 md:order-1">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-medium">ДОзамовлення</h3>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-medium">Дозамовлення</h3>
+                <button
+                  onClick={clearDoz}
+                  className="text-xs px-2 py-1 rounded-lg border border-red-200 text-red-600 hover:bg-red-50"
+                >
+                  Очистити
+                </button>
+              </div>
               <div className="bg-neutral-100 rounded-xl p-1 text-sm">
                 <button
                   onClick={() => setReorderTab("all")}
@@ -393,6 +423,7 @@ export default function Constructor() {
                 </button>
               </div>
             </div>
+
             <div className="mt-3 overflow-x-auto">
               <table className="min-w-full border-separate border-spacing-y-2">
                 <thead>
@@ -492,3 +523,4 @@ export default function Constructor() {
     </div>
   );
 }
+

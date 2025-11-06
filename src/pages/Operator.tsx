@@ -134,6 +134,19 @@ function Badge({children, color}:{children: React.ReactNode; color: "blue"|"ambe
   }[color];
   return <span className={`px-2 py-0.5 rounded-full text-xs border ${cls}`}>{children}</span>;
 }
+ 
+function btnColorByPriority(p?: number) {
+  if (p === 3) {
+    // терміново
+    return "bg-red-600 hover:bg-red-700";
+  }
+  if (p === 2) {
+    // треба зробити
+    return "bg-amber-500 hover:bg-amber-600";
+  }
+  // по плану / немає
+  return "bg-blue-600 hover:bg-blue-700";
+}
 
 /* ============================
    Друк наклейок (100×30)
@@ -478,8 +491,13 @@ export default function OperatorPage(){
                     <td className="py-2 px-3 align-top">{o.plates}</td>
                     <td className="py-2 px-3 align-top">{o.items.length}</td>
                     <td className="py-2 px-3 align-top">
-                      <button onClick={()=>takeOrder(o.id)} className="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700">Забрати</button>
-                    </td>
+                      <button
+  				onClick={() => takeOrder(o.id)}
+  				className={`px-3 py-1.5 rounded-lg text-white ${btnColorByPriority(o.priority)}`}
+					>
+  					Забрати
+		     </button>
+		    </td>
                   </tr>
                 </React.Fragment>
               ))}
